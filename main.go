@@ -5,7 +5,6 @@ import (
 	"os"
 	"strings"
 
-	"github.com/aliyun/alibaba-cloud-sdk-go/sdk/errors"
 	"github.com/aliyun/alibaba-cloud-sdk-go/sdk/requests"
 	"github.com/aliyun/alibaba-cloud-sdk-go/services/ecs"
 	cli "gopkg.in/urfave/cli.v1"
@@ -48,11 +47,7 @@ func main() {
 
 	err := app.Run(os.Args)
 	if err != nil {
-		if serverErr, isServerErr := err.(*errors.ServerError); isServerErr {
-			fmt.Printf("得到阿里云的服务器错误提示: %s\n\n", serverErr)
-		} else {
-			fmt.Println(err)
-		}
+		panic(err)
 	}
 }
 
