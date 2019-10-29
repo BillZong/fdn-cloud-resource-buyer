@@ -17,6 +17,17 @@ const (
 	accessKeyIDShort     = "k"
 	accessKeySecretLong  = "access-key-secret"
 	accessKeySecretShort = "s"
+	configFileLong       = "config"
+	configFileShort      = "c"
+	templateIDLong       = "template-id"
+	templateIDShort      = "t"
+	nodeCountLong        = "node-count"
+	nodeCountShort       = "n"
+	periodLong           = "period"
+	periodShort          = "p"
+	periodUnitLong       = "period-unit"
+	periodUnitShort      = "u"
+	debugKeyLong         = "debug"
 )
 
 func main() {
@@ -31,6 +42,10 @@ func main() {
 
 	app.Flags = []cli.Flag{
 		cli.StringFlag{
+			Name:  "config,c",
+			Usage: "配置文件路径，使用后不参考其它参数配置",
+		},
+		cli.StringFlag{
 			Name:  "region-id,r",
 			Usage: "区域编号，要求一定要有",
 		},
@@ -42,6 +57,29 @@ func main() {
 			Name:  "access-key-secret,s",
 			Usage: "授权Key秘钥",
 		},
+		cli.StringFlag{
+			Name:  "template-id,t",
+			Usage: "采购模板ID",
+		},
+		cli.IntFlag{
+			Name:  "node-count,n",
+			Usage: "采购节点数量",
+			Value: 1,
+		},
+		cli.IntFlag{
+			Name:  "period,p",
+			Usage: "采购周期数量，单位参考period-unit",
+			Value: 1,
+		},
+		cli.StringFlag{
+			Name:  "period-unit,u",
+			Usage: "采购周期单位，Month/Week，默认为Month",
+			Value: "Month",
+		},
+		cli.BoolFlag{
+			Name:  debugKeyLong,
+			Usage: "调试用，不直接运行",
+		},
 	}
 	app.Action = startClient
 
@@ -51,10 +89,61 @@ func main() {
 	}
 }
 
+type EcsConfig struct {
+	RegionId     string  `yaml:"region-id"`
+	AccessId     string  `yaml:"access-key-id"`
+	AccessSecret string  `yaml:"access-key-secret"`
+	TemplateID   string  `yaml:"template-id"`
+	NodeCount    *int    `yaml:"node-count,omitempty"`
+	Period       *int    `yaml:"period,omitempty"`
+	PeriodUnit   *string `yaml:"period-unit,omitempty"`
+	Debug        *bool   `yaml:"debug,omitempty"`
+}
+
 func startClient(ctx *cli.Context) error {
-	regionID := ctx.String(regionIDLong)
-	accessKey := ctx.String(accessKeyIDLong)
-	accessSecret := ctx.String(accessKeySecretLong)
+	var regionID, accessKey, accessSecret string
+	var templateID string
+	var nodeCount, period int
+	var periodUnit string
+	debugMode := false
+	if path := ctx.String(configFileLong); len(path) > 0 {
+		var cfg EcsConfig
+		if err := ReadYamlFile(path, &cfg); err != nil {
+			return err
+		}
+		regionID = cfg.RegionId
+		accessKey = cfg.AccessId
+		accessSecret = cfg.AccessSecret
+		templateID = cfg.TemplateID
+		if cfg.NodeCount != nil {
+			nodeCount = *cfg.NodeCount
+		} else {
+			nodeCount = 1
+		}
+		if cfg.Period != nil {
+			period = *cfg.Period
+		} else {
+			period = 1
+		}
+		if cfg.PeriodUnit != nil {
+			periodUnit = *cfg.PeriodUnit
+		} else {
+			periodUnit = "Month"
+		}
+		if cfg.Debug != nil {
+			debugMode = *cfg.Debug
+		}
+	} else {
+		regionID = ctx.String(regionIDLong)
+		accessKey = ctx.String(accessKeyIDLong)
+		accessSecret = ctx.String(accessKeySecretLong)
+		templateID = ctx.String(templateIDLong)
+		nodeCount = ctx.Int(nodeCountLong)
+		period = ctx.Int(periodLong)
+		periodUnit = ctx.String(periodUnitLong)
+		debugMode = ctx.Bool(debugKeyLong)
+	}
+
 	client, err := ecs.NewClientWithAccessKey(regionID, accessKey, accessSecret)
 	if err != nil {
 		return err
@@ -62,14 +151,20 @@ func startClient(ctx *cli.Context) error {
 
 	// 创建请求并设置参数
 	request := ecs.CreateRunInstancesRequest()
-	request.LaunchTemplateId = "lt-wz94jxtokyiy1r51gk4a"
+	request.LaunchTemplateId = templateID
+	request.Amount = requests.NewInteger(nodeCount) // 购买台数
+	request.Period = requests.NewInteger(period)    // 购买周期
+	request.PeriodUnit = periodUnit                 // 周期单位，默认为月
+	if debugMode {
+		request.DryRun = requests.NewBoolean(true) // 调试模式
+	}
+
 	// request.ImageId = "ubuntu_18_04_64_20G_alibase_20190624.vhd" // Ubuntu 18, 64位
 	// request.InstanceType = "ecs.sn1ne.large"                     // 计算型，2核4G，X86架构
 	// // 必须要有安全组
 	// request.SecurityGroupId = "sg-wz95w0u4m3yxgh68nwy3"
 	// request.ZoneId = "cn-shenzhen-a"
 	// request.ClientToken = utils.GetUUID()
-	// request.Amount = requests.NewInteger(5) // 购买台数
 	// // // 指定标签
 	// // request.Tag = &[]ecs.RunInstancesTag{
 	// // 	ecs.RunInstancesTag{
@@ -83,14 +178,12 @@ func startClient(ctx *cli.Context) error {
 	// request.UniqueSuffix = requests.NewBoolean(true)
 	// request.Password = "Ab123456"
 
-	request.Period = requests.NewInteger(1)
-	request.DryRun = requests.NewBoolean(true) // 调试用
-	response, err := client.RunInstances(request)
+	response, err := client.RunInstances(request) // 发布请求
 	if err != nil {
 		// 异常处理
 		return err
 	}
-	fmt.Printf("success(%d)! instanceId = %s\n", response.GetHttpStatus(), strings.Join(response.InstanceIdSets.InstanceIdSet, ","))
+	fmt.Printf("success(%d)! instanceId = %s, instance amount %v\n", response.GetHttpStatus(), strings.Join(response.InstanceIdSets.InstanceIdSet, ","), len(response.InstanceIdSets.InstanceIdSet))
 
 	return nil
 }
