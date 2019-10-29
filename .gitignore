@@ -10,10 +10,6 @@
 *un~
 .DS_Store
 */**/.DS_Store
-.bloctctest
-*/**/*tx_database*
-*/**/*dapps*
-build/_vendor/pkg
 
 #*
 .#*
@@ -47,9 +43,6 @@ profile.cov
 
 # vendor package no need to upload
 vendor/
-#vendor/github.com/
-#vendor/golang.org/
-#vendor/gopkg.in/
 
 # dlv debug file
 debug
