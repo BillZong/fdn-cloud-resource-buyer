@@ -115,21 +115,24 @@ func startClient(ctx *cli.Context) error {
 		accessKey = cfg.AccessId
 		accessSecret = cfg.AccessSecret
 		templateID = cfg.TemplateID
+
+		// optional args for default value
 		if cfg.NodeCount != nil {
 			nodeCount = *cfg.NodeCount
 		} else {
-			nodeCount = 1
+			nodeCount = ctx.Int(nodeCountLong)
 		}
 		if cfg.Period != nil {
 			period = *cfg.Period
 		} else {
-			period = 1
+			period = ctx.Int(periodLong)
 		}
 		if cfg.PeriodUnit != nil {
 			periodUnit = *cfg.PeriodUnit
 		} else {
-			periodUnit = "Month"
+			periodUnit = ctx.String(periodUnitLong)
 		}
+
 		if cfg.Debug != nil {
 			debugMode = *cfg.Debug
 		}
