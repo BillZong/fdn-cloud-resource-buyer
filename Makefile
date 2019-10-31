@@ -15,7 +15,8 @@ zip: build $(BINARY_ARCHVIE_PATH)
 	tar -zcvf $(BINARY_ARCHVIE_PATH)/$(BINARY_NAME).tar.gz bin
 $(BINARY_ARCHVIE_PATH):
 	mkdir -p $(BINARY_ARCHVIE_PATH)
-build: build-mac build-linux
+#build: build-mac build-linux
+build: build-linux
 test: 
 	$(GOTEST) -v ./...
 clean: 
