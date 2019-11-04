@@ -46,6 +46,7 @@ vendor/
 
 # dlv debug file
 debug
+__debug_bin
 
 # go 1.11 module build, require lock file
 go.sum

@@ -1,9 +1,10 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
-	"strings"
+	"time"
 
 	"github.com/aliyun/alibaba-cloud-sdk-go/sdk/requests"
 	"github.com/aliyun/alibaba-cloud-sdk-go/services/ecs"
@@ -106,6 +107,8 @@ func startClient(ctx *cli.Context) error {
 	var nodeCount, period int
 	var periodUnit string
 	debugMode := false
+	hostNamePrefix := "angel"
+
 	if path := ctx.String(configFileLong); len(path) > 0 {
 		var cfg EcsConfig
 		if err := ReadYamlFile(path, &cfg); err != nil {
@@ -152,41 +155,69 @@ func startClient(ctx *cli.Context) error {
 		return err
 	}
 
+	instanceIds, err := runInstances(client, templateID, nodeCount, period, periodUnit, hostNamePrefix, debugMode)
+	if err != nil {
+		return err
+	}
+
+	infos, err := checkInstancesInfo(client, instanceIds)
+	if err != nil {
+		return nil
+	}
+
+	fmt.Println(infos)
+
+	return nil
+}
+
+type nodeInfo struct {
+	InstanceID string
+	InnerIP    string
+	HostName   string
+	createTime string //iso8601, UTC
+}
+
+func checkInstancesInfo(client *ecs.Client, instanceIds []string) ([]nodeInfo, error) {
+	request := ecs.CreateDescribeInstancesRequest()
+	ids, err := json.Marshal(instanceIds)
+	if err != nil {
+		return nil, err
+	}
+	request.InstanceIds = string(ids)
+	response, err := client.DescribeInstances(request)
+	if err != nil {
+		return nil, err
+	}
+
+	instances := response.Instances.Instance
+	infos := make([]nodeInfo, 0, len(instances))
+	for _, instance := range instances {
+		fmt.Printf("我们要保存节点ID、内网IP、主机名、创建时间，分别为: %v, %v, %v, %v\n", instance.InstanceId, instance.InnerIpAddress.IpAddress, instance.HostName, instance.CreationTime)
+		infos = append(infos, nodeInfo{instance.InstanceId, instance.InnerIpAddress.IpAddress[0], instance.HostName, instance.CreationTime})
+	}
+
+	return infos, nil
+}
+
+func runInstances(client *ecs.Client, templateID string, nodeCount int, period int, periodUnit string, hostNamePrefix string, debugMode bool) ([]string, error) {
 	// 创建请求并设置参数
 	request := ecs.CreateRunInstancesRequest()
 	request.LaunchTemplateId = templateID
 	request.Amount = requests.NewInteger(nodeCount) // 购买台数
 	request.Period = requests.NewInteger(period)    // 购买周期
 	request.PeriodUnit = periodUnit                 // 周期单位，默认为月
+	t := time.Now().Format("2006-01-02-15")
+	request.InstanceName = fmt.Sprintf("%v-dynamic-%v-[%v,3]", hostNamePrefix, t, nodeCount)
+	request.HostName = fmt.Sprintf("%v-%v-[%v,3]", hostNamePrefix, t, nodeCount)
 	if debugMode {
 		request.DryRun = requests.NewBoolean(true) // 调试模式
 	}
-
-	// request.ImageId = "ubuntu_18_04_64_20G_alibase_20190624.vhd" // Ubuntu 18, 64位
-	// request.InstanceType = "ecs.sn1ne.large"                     // 计算型，2核4G，X86架构
-	// // 必须要有安全组
-	// request.SecurityGroupId = "sg-wz95w0u4m3yxgh68nwy3"
-	// request.ZoneId = "cn-shenzhen-a"
-	// request.ClientToken = utils.GetUUID()
-	// // // 指定标签
-	// // request.Tag = &[]ecs.RunInstancesTag{
-	// // 	ecs.RunInstancesTag{
-	// // 		Key:   "tag-for-test",
-	// // 		Value: "123",
-	// // 	},
-	// // }
-	// // 指定后缀
-	// request.InstanceName = "MyTestInstance[1,2]" // 实例名称，MyTestInstance01, MyTestInstance02, ...
-	// request.HostName = "MyTestHost[1,2]"         // MyTestHost01, MyTestHost02, ...
-	// request.UniqueSuffix = requests.NewBoolean(true)
-	// request.Password = "Ab123456"
+	request.ClientToken = t // 1小时只允许扩容一次
 
 	response, err := client.RunInstances(request) // 发布请求
 	if err != nil {
 		// 异常处理
-		return err
+		return nil, err
 	}
-	fmt.Printf("success(%d)! instanceId = %s, instance amount %v\n", response.GetHttpStatus(), strings.Join(response.InstanceIdSets.InstanceIdSet, ","), len(response.InstanceIdSets.InstanceIdSet))
-
-	return nil
+	return response.InstanceIdSets.InstanceIdSet, nil
 }
