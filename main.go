@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
+	"strconv"
 	"time"
 
 	"github.com/aliyun/alibaba-cloud-sdk-go/sdk/requests"
@@ -155,19 +157,43 @@ func startClient(ctx *cli.Context) error {
 		return err
 	}
 
+	// 创建实例
 	instanceIds, err := runInstances(client, templateID, nodeCount, period, periodUnit, hostNamePrefix, debugMode)
 	if err != nil {
 		return err
 	}
 
+	// 获取实例信息
 	infos, err := checkInstancesInfo(client, instanceIds)
 	if err != nil {
 		return nil
 	}
 
-	fmt.Println(infos)
+	// 连接实例并将它们加入OpenWhisk集群
+	if err := joinInstancesToOWCluster(infos, 10911, "root", "123456"); err != nil {
+		return err
+	}
 
 	return nil
+}
+
+func joinInstancesToOWCluster(infos []nodeInfo, nodeSSHPort int, user, password string) error {
+	var ips, names string
+	for idx, info := range infos {
+		ips += info.InnerIP
+		names += info.HostName
+		if idx < len(infos)-1 {
+			ips += ","
+			names += ","
+		}
+	}
+
+	output, err := exec.Command("./join-k8s.sh", "-h", ips, "-P", strconv.Itoa(nodeSSHPort), "-n", names, "-u", user, "-p", password).Output()
+	if err == nil {
+		fmt.Printf("output: %v\n", string(output))
+	}
+
+	return err
 }
 
 type nodeInfo struct {
