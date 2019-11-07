@@ -31,7 +31,8 @@ const (
 	periodUnitLong     = "period-unit"
 	hostNamePrefixLong = "host-name-prefix"
 	sshPortLong        = "ssh-port"
-	accountLong        = "account"
+	sshKeyPairNameLong = "ssh-key-pair-name"
+	sshKeyFileLong     = "ssh-key-file"
 	passwordLong       = "password"
 	// 调试选项
 	debugKeyLong = "debug"
@@ -94,14 +95,16 @@ func main() {
 			Value: 20,
 		},
 		cli.StringFlag{
-			Name:  accountLong,
-			Usage: "节点的账户，默认root",
-			Value: "root",
+			Name:  sshKeyPairNameLong,
+			Usage: "节点的公私钥密码对名称，如果使用password登陆，不需要输入。如果都存在，则优先使用公私钥",
+		},
+		cli.StringFlag{
+			Name:  sshKeyFileLong,
+			Usage: "节点的私钥文件路径，如果使用(ssh-key-pair-name)私钥登陆，该选项必须",
 		},
 		cli.StringFlag{
 			Name:  passwordLong,
-			Usage: "节点的密码，默认123456Abc",
-			Value: "123456Abc",
+			Usage: "节点的密码，如果使用ssh私钥登陆，不需要输入",
 		},
 		cli.BoolFlag{
 			Name:  debugKeyLong,
@@ -126,7 +129,8 @@ type EcsConfig struct {
 	PeriodUnit     *string `yaml:"period-unit,omitempty"`
 	HostNamePrefix *string `yaml:"host-name-prefix,omitempty"`
 	SSHPort        *int    `yaml:"ssh-port,omitempty"`
-	Account        *string `yaml:"account,omitempty"`
+	SSHKeyPairName *string `yaml:"ssh-key-pair-name,omitempty"`
+	SSHKeyFile     *string `yaml:"ssh-key-file,omitempty"`
 	Password       *string `yaml:"password,omitempty"`
 	Debug          *bool   `yaml:"debug,omitempty"`
 }
@@ -134,7 +138,7 @@ type EcsConfig struct {
 func startClient(ctx *cli.Context) error {
 	var regionID, accessKey, accessSecret, templateID string
 	var nodeCount, period, sshPort int
-	var periodUnit, hostNamePrefix, account, password string
+	var periodUnit, hostNamePrefix, sshKeyPairName, sshKeyFile, password string
 	debugMode := false
 
 	if path := ctx.String(configFileLong); len(path) > 0 {
@@ -173,10 +177,15 @@ func startClient(ctx *cli.Context) error {
 		} else {
 			sshPort = ctx.Int(sshPortLong)
 		}
-		if cfg.Account != nil {
-			account = *cfg.Account
+		if cfg.SSHKeyPairName != nil {
+			sshKeyPairName = *cfg.SSHKeyPairName
 		} else {
-			account = ctx.String(accountLong)
+			sshKeyPairName = ctx.String(sshKeyPairNameLong)
+		}
+		if cfg.SSHKeyFile != nil {
+			sshKeyFile = *cfg.SSHKeyFile
+		} else {
+			sshKeyFile = ctx.String(sshKeyFileLong)
 		}
 		if cfg.Password != nil {
 			password = *cfg.Password
@@ -197,9 +206,16 @@ func startClient(ctx *cli.Context) error {
 		periodUnit = ctx.String(periodUnitLong)
 		hostNamePrefix = ctx.String(hostNamePrefixLong)
 		sshPort = ctx.Int(sshPortLong)
-		account = ctx.String(accountLong)
+		sshKeyPairName = ctx.String(sshKeyPairNameLong)
+		sshKeyFile = ctx.String(sshKeyFileLong)
 		password = ctx.String(passwordLong)
 		debugMode = ctx.Bool(debugKeyLong)
+	}
+
+	if len(sshKeyPairName) > 0 {
+		if len(sshKeyFile) == 0 {
+			return fmt.Errorf("need to set --ssh-key-file")
+		}
 	}
 
 	client, err := ecs.NewClientWithAccessKey(regionID, accessKey, accessSecret)
@@ -208,7 +224,7 @@ func startClient(ctx *cli.Context) error {
 	}
 
 	// 创建实例
-	instanceIds, err := runInstances(client, templateID, nodeCount, period, periodUnit, hostNamePrefix, account, password, debugMode)
+	instanceIds, err := runInstances(client, templateID, nodeCount, period, periodUnit, hostNamePrefix, sshKeyPairName, password, debugMode)
 	if err != nil {
 		return err
 	}
@@ -219,15 +235,15 @@ func startClient(ctx *cli.Context) error {
 		return nil
 	}
 
-	// 连接实例并将它们加入OpenWhisk集群
-	if err := joinInstancesToOWCluster(infos, sshPort, account, password); err != nil {
+	// 连接实例并将它们加入OpenWhisk集群，阿里云的默认登陆账户为root
+	if err := joinInstancesToOWCluster(infos, sshPort, "root", password, sshKeyFile); err != nil {
 		return err
 	}
 
 	return nil
 }
 
-func joinInstancesToOWCluster(infos []nodeInfo, nodeSSHPort int, user, password string) error {
+func joinInstancesToOWCluster(infos []nodeInfo, nodeSSHPort int, user, password, sshKeyFile string) error {
 	var ips, names string
 	for idx, info := range infos {
 		ips += info.InnerIP
@@ -237,12 +253,14 @@ func joinInstancesToOWCluster(infos []nodeInfo, nodeSSHPort int, user, password 
 			names += ","
 		}
 	}
-
-	output, err := exec.Command("./join-k8s.sh", "-h", ips, "-P", strconv.Itoa(nodeSSHPort), "-n", names, "-u", user, "-p", password).Output()
-	if err == nil {
-		fmt.Printf("output: %v\n", string(output))
+	if len(sshKeyFile) > 0 {
+		// 使用私钥文件ssh登陆
+		_, err := exec.Command("./join-k8s.sh", "-h", ips, "-P", strconv.Itoa(nodeSSHPort), "-n", names, "-u", user, "-s", sshKeyFile).Output()
+		return err
 	}
 
+	// 使用密码ssh登陆
+	_, err := exec.Command("./join-k8s.sh", "-h", ips, "-P", strconv.Itoa(nodeSSHPort), "-n", names, "-u", user, "-p", password).Output()
 	return err
 }
 
@@ -275,14 +293,18 @@ func checkInstancesInfo(client *ecs.Client, instanceIds []string) ([]nodeInfo, e
 	return infos, nil
 }
 
-func runInstances(client *ecs.Client, templateID string, nodeCount, period int, periodUnit string, hostNamePrefix, account, password string, debugMode bool) ([]string, error) {
+func runInstances(client *ecs.Client, templateID string, nodeCount, period int, periodUnit string, hostNamePrefix, sshKeyPairName, password string, debugMode bool) ([]string, error) {
 	// 创建请求并设置参数
 	request := ecs.CreateRunInstancesRequest()
 	request.LaunchTemplateId = templateID
 	request.Amount = requests.NewInteger(nodeCount) // 购买台数
 	request.Period = requests.NewInteger(period)    // 购买周期
 	request.PeriodUnit = periodUnit                 // 周期单位，默认为月
-	request.Password = password
+	if len(sshKeyPairName) > 0 {
+		request.KeyPairName = sshKeyPairName // 优先使用私钥文件登陆
+	} else if len(password) > 0 {
+		request.Password = password
+	}
 	t := time.Now().Format("2006-01-02-15-04")
 	request.InstanceName = fmt.Sprintf("%v-dynamic-%v-[%v,3]", hostNamePrefix, t, nodeCount)
 	request.HostName = fmt.Sprintf("%v-%v-[%v,3]", hostNamePrefix, t, nodeCount)
