@@ -80,10 +80,10 @@ if [ -z $user ]; then
     user="root"
 fi
 
-if [ -n $sshFile ]; then
+if [ -n "$sshFile" ]; then
     join_file="./joiner-key.sh"
     key=$sshFile
-elif [ -n $password ]; then
+elif [ -n "$password" ]; then
     join_file="./joiner-pwd.sh"
     key=$password
 else
