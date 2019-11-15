@@ -81,10 +81,10 @@ if [ -z $user ]; then
 fi
 
 if [ -n "$sshFile" ]; then
-    join_file="./joiner-key.sh"
+    joiner_file="./joiner-key.sh"
     key=$sshFile
 elif [ -n "$password" ]; then
-    join_file="./joiner-pwd.sh"
+    joiner_file="./joiner-pwd.sh"
     key=$password
 else
     echo "no ssh key file and password, could not login"
@@ -103,10 +103,10 @@ kubeadm token create --ttl 5m --print-join-command >$join_token_cmd_file
 # ssh 所有节点，并将其加入K8S集群
 if [ -n "$hostsArr" ]; then
     for host in ${hostsArr[@]}; do
-        $join_file $host $port $user $key $join_token_cmd_file
+        $joiner_file $host $port $user $key $join_token_cmd_file
     done
 else
-    $join_file $hosts $port $user $key $join_token_cmd_file
+    $joiner_file $hosts $port $user $key $join_token_cmd_file
 fi
 
 # 将每个节点都打上标签
