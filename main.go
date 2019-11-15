@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"io/ioutil"
 	"os"
 	"os/exec"
 	"strconv"
@@ -14,19 +15,15 @@ import (
 )
 
 const (
+	configFileLong   = "config"
+	nodeCountLong    = "node-count"
+	showTemplateLong = "show-template"
 	// 必选项
-	regionIDLong         = "region-id"
-	regionIDShort        = "r"
-	accessKeyIDLong      = "access-key-id"
-	accessKeyIDShort     = "k"
-	accessKeySecretLong  = "access-key-secret"
-	accessKeySecretShort = "s"
-	configFileLong       = "config"
-	configFileShort      = "c"
-	templateIDLong       = "template-id"
-	templateIDShort      = "t"
+	regionIDLong        = "region-id"
+	accessKeyIDLong     = "access-key-id"
+	accessKeySecretLong = "access-key-secret"
+	templateIDLong      = "template-id"
 	// 可选项
-	nodeCountLong      = "node-count"
 	periodLong         = "period"
 	periodUnitLong     = "period-unit"
 	hostNamePrefixLong = "host-name-prefix"
@@ -38,80 +35,112 @@ const (
 	debugKeyLong = "debug"
 )
 
+const (
+	templateToShow = `cluster-type: "fixed" # fixed or dynamic. fixed one should provide existed node (not join to K8S and OW yet) list. dynamic one would use buy node process.
+fixed:
+  ssh-port: 12345
+  user-name: "root"
+  ssh-key-file: "./key-20191106" # use private key
+  password: "123456Abc" # use password
+  nodes:
+    - info:
+      inner-ip: "172.17.0.2"
+      host-name: "a"
+    - info:
+      inner-ip: "172.17.0.3"
+      host-name: "b"
+    - info:
+      inner-ip: "172.17.0.4"
+      host-name: "c"
+dynamic:
+  cloud-provider: "aliyun"
+  aliyun:
+    # Required Parameters.
+    # region id devided by aliyun
+    region-id: "cn-shenzhen"
+    # user acccess key id, might be RAM user
+    access-key-id: "123456abcdef"
+    # user access key secret
+    access-key-secret: "asdfasdfasdf"
+    # buy node template ID 
+    template-id: "lt-lkjhasdfg"
+    # Optional Parameters.
+    # buy node period, no need when the ecs buying template use post-paid mode
+    # period: 1
+    # # buy node period unit, Month/Week，default "Month"
+    # period-unit: "Week"
+    # host name creation prefix, default "worker"
+    host-name-prefix: "worker"
+    # ssh port, default 20
+    ssh-port: 12345
+    # ssh key pair name created in ecs console. No need when use password login. Higher priority than password
+    ssh-key-pair-name: "test-key-20191106"
+    # ssh private key path, must needed when use ssh-key-pair-name
+    ssh-key-file: "./key-20191106"
+    # password, no need when use ssh private key login
+    password: "123456Abc"
+    # Debug Parameters
+    # Debug mode. default false
+    debug: false
+# Command Line Parameters. Could be used in yaml, too
+# # node count that want to be join. default 1
+# node-count:
+#   1`
+)
+
 func main() {
 	app := cli.NewApp()
 
-	app.Name = "AliyunECSBuyer"
-	app.Version = "0.0.1"
-	app.Description = "fdn aliyun 资源购买工具"
+	app.Name = "node-joiner"
+	app.Version = "0.1.0"
+	app.Description = "Tools for invoker node (buy and) join in OpenWhisk cluster. First develeopped and used in FDN. Currently support fixed-number-nodes cluster, and aliyun ecs."
 	app.Authors = []cli.Author{
-		{Name: "FDN developper"},
+		{Name: "Bill Zong", Email: "billzong@163.com"},
 	}
 
-	app.Flags = []cli.Flag{
-		cli.StringFlag{
-			Name:  "config,c",
-			Usage: "配置文件路径，使用后不参考其它参数配置",
-		},
-		cli.StringFlag{
-			Name:  "region-id,r",
-			Usage: "区域编号，要求一定要有",
-		},
-		cli.StringFlag{
-			Name:  "access-key-id,k",
-			Usage: "授权KeyID",
-		},
-		cli.StringFlag{
-			Name:  "access-key-secret,s",
-			Usage: "授权Key秘钥",
-		},
-		cli.StringFlag{
-			Name:  "template-id,t",
-			Usage: "采购模板ID",
-		},
-		cli.IntFlag{
-			Name:  nodeCountLong,
-			Usage: "采购节点数量，默认为1",
-			Value: 1,
-		},
-		cli.IntFlag{
-			Name:  periodLong,
-			Usage: "采购周期数量，单位参考period-unit。如果采用的采购模板为按量付费，则该选项无效",
-			Value: 1,
-		},
-		cli.StringFlag{
-			Name:  periodUnitLong,
-			Usage: "采购周期单位，Month/Week，默认为Month。如果采用的采购模板为按量付费，则该选项无效",
-			Value: "Month",
-		},
-		cli.StringFlag{
-			Name:  hostNamePrefixLong,
-			Usage: "节点的名称前缀，默认为fdn-worker",
-			Value: "fdn-worker",
-		},
-		cli.Int64Flag{
-			Name:  sshPortLong,
-			Usage: "节点的SSH端口号，默认20",
-			Value: 20,
-		},
-		cli.StringFlag{
-			Name:  sshKeyPairNameLong,
-			Usage: "节点的公私钥密码对名称，如果使用password登陆，不需要输入。如果都存在，则优先使用公私钥",
-		},
-		cli.StringFlag{
-			Name:  sshKeyFileLong,
-			Usage: "节点的私钥文件路径，如果使用(ssh-key-pair-name)私钥登陆，该选项必须",
-		},
-		cli.StringFlag{
-			Name:  passwordLong,
-			Usage: "节点的密码，如果使用ssh私钥登陆，不需要输入",
-		},
-		cli.BoolFlag{
-			Name:  debugKeyLong,
-			Usage: "调试用，不直接运行",
+	app.Commands = []cli.Command{
+		// {
+		// 	Name:  "join",
+		// 	Usage: "options for join node to OpenWhisk cluster",
+		// 	Flags: []cli.Flag{
+		// 		cli.StringFlag{
+		// 			Name:  "config,c",
+		// 			Usage: "config file path, must have.",
+		// 			Value: "./node-joiner-configs.yaml",
+		// 		},
+		// 		cli.IntFlag{
+		// 			Name:  nodeCountLong,
+		// 			Usage: "node count that want to be join",
+		// 			Value: 1,
+		// 		},
+		// 	},
+		// 	Action: startClient,
+		// },
+		{
+			Name:  "template",
+			Usage: "options for config yaml template",
+			Subcommands: []cli.Command{
+				{
+					Name:   "show",
+					Usage:  "show the template",
+					Action: showTemplate,
+				},
+				{
+					Name:  "create",
+					Usage: "create (or cover) the tempalte to the path",
+					Flags: []cli.Flag{
+						cli.StringFlag{
+							Name:  "path,p",
+							Usage: "path for the config file, must have.",
+							Value: "./node-joiner-configs.yaml",
+						},
+					},
+					Action: createTemplate,
+				},
+			},
 		},
 	}
-	app.Action = startClient
+	// app.Action = startClient
 
 	err := app.Run(os.Args)
 	if err != nil {
@@ -319,4 +348,17 @@ func runInstances(client *ecs.Client, templateID string, nodeCount, period int, 
 		return nil, err
 	}
 	return response.InstanceIdSets.InstanceIdSet, nil
+}
+
+func createTemplate(ctx *cli.Context) error {
+	path := ctx.String("path")
+	if len(path) == 0 {
+		path = "./node-joiner-configs.yaml"
+	}
+	return ioutil.WriteFile(path, []byte(templateToShow), 0644)
+}
+
+func showTemplate(ctx *cli.Context) error {
+	fmt.Println("You could use this config yaml template:\n", templateToShow)
+	return nil
 }
