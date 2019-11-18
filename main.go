@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/aliyun/alibaba-cloud-sdk-go/sdk/requests"
@@ -132,8 +133,8 @@ type NodeInfo struct {
 type FixedNodeConfig struct {
 	SSHPort    int         `yaml:"ssh-port,omitempty"`
 	UserName   string      `yaml:"user-name,omitempty"`
-	SSHKeyFile string      `yaml:"ssh-key-file,omitempty"`
-	Password   string      `yaml:"password,omitempty"`
+	SSHKeyFile *string     `yaml:"ssh-key-file,omitempty"`
+	Password   *string     `yaml:"password,omitempty"`
 	Nodes      []*NodeInfo `yaml:"nodes"`
 }
 
@@ -185,17 +186,50 @@ func joinOWCluster(ctx *cli.Context) error {
 	}
 
 	if cfg.ClusterType == "fixed" {
-		//TODO: fixed type configs
+		return handleFixedConfigs(cfg.FixedConfig, *cfg.NodeCount)
 	} else if cfg.ClusterType == "dynamic" {
 		if cfg.DynamicConfig.CloudProvider != "aliyun" {
 			return fmt.Errorf("cloud provider (%v) not supported yet", cfg.DynamicConfig.CloudProvider)
 		}
-		if err := handleAliyunECSBuyConfigs(cfg.DynamicConfig.AliyunConfig, *cfg.NodeCount); err != nil {
-			return err
-		}
+		return handleAliyunECSBuyConfigs(cfg.DynamicConfig.AliyunConfig, *cfg.NodeCount)
 	} else {
 		return fmt.Errorf("cluster type (%v) not supported yet", cfg.ClusterType)
 	}
+}
+
+func contains(s []string, e string) bool {
+	for _, a := range s {
+		if a == e {
+			return true
+		}
+	}
+	return false
+}
+
+func handleFixedConfigs(cfg *FixedNodeConfig, nodeCount int) error {
+	// got current nodes
+	output, err := exec.Command("bash", "-c", "kubectl get no | awk 'NR==1{next} $3!=\"master\" {print $1}'").Output()
+	if err != nil {
+		fmt.Printf("kubectl failed: %v", err.Error())
+		return err
+	}
+	currentNodeNames := strings.Split(string(output), "\n")
+
+	// find complement set of the configuration and current node set
+	count := 0
+	targetNodes := make([]*NodeInfo, 0)
+	for _, node := range cfg.Nodes {
+		if count >= nodeCount {
+			break
+		}
+		if !contains(currentNodeNames, node.HostName) {
+			targetNodes = append(targetNodes, node)
+			count++
+		}
+	}
+
+	// add nodes
+	joinInstancesToOWCluster(targetNodes, cfg.SSHPort, cfg.UserName, cfg.SSHKeyFile, cfg.Password)
 
 	return nil
 }
@@ -239,7 +273,7 @@ func handleAliyunECSBuyConfigs(cfg *AliyunEcsConfig, nodeCount int) error {
 	return nil
 }
 
-func joinInstancesToOWCluster(infos []nodeInfo, nodeSSHPort int, user string, sshKeyFile, password *string) error {
+func joinInstancesToOWCluster(infos []*NodeInfo, nodeSSHPort int, user string, sshKeyFile, password *string) error {
 	if sshKeyFile == nil && password == nil {
 		return fmt.Errorf("no key, could not login to nodes")
 	}
@@ -253,7 +287,7 @@ func joinInstancesToOWCluster(infos []nodeInfo, nodeSSHPort int, user string, ss
 			names += ","
 		}
 	}
-	if len(*sshKeyFile) > 0 {
+	if sshKeyFile != nil && len(*sshKeyFile) > 0 {
 		// 使用私钥文件ssh登陆
 		_, err := exec.Command("./join-k8s.sh", "-h", ips, "-P", strconv.Itoa(nodeSSHPort), "-n", names, "-u", user, "-s", *sshKeyFile).Output()
 		return err
@@ -264,14 +298,7 @@ func joinInstancesToOWCluster(infos []nodeInfo, nodeSSHPort int, user string, ss
 	return err
 }
 
-type nodeInfo struct {
-	InstanceID string
-	InnerIP    string
-	HostName   string
-	createTime string //iso8601, UTC
-}
-
-func checkInstancesInfo(client *ecs.Client, instanceIds []string) ([]nodeInfo, error) {
+func checkInstancesInfo(client *ecs.Client, instanceIds []string) ([]*NodeInfo, error) {
 	request := ecs.CreateDescribeInstancesRequest()
 	ids, err := json.Marshal(instanceIds)
 	if err != nil {
@@ -284,10 +311,12 @@ func checkInstancesInfo(client *ecs.Client, instanceIds []string) ([]nodeInfo, e
 	}
 
 	instances := response.Instances.Instance
-	infos := make([]nodeInfo, 0, len(instances))
+	infos := make([]*NodeInfo, 0)
 	for _, instance := range instances {
-		fmt.Printf("我们要保存节点ID、内网IP、主机名、创建时间，分别为: %v, %v, %v, %v\n", instance.InstanceId, instance.InnerIpAddress.IpAddress, instance.HostName, instance.CreationTime)
-		infos = append(infos, nodeInfo{instance.InstanceId, instance.InnerIpAddress.IpAddress[0], instance.HostName, instance.CreationTime})
+		infos = append(infos, &NodeInfo{
+			InnerIP:  instance.InnerIpAddress.IpAddress[0],
+			HostName: instance.HostName,
+		})
 	}
 
 	return infos, nil
