@@ -191,7 +191,7 @@ func joinOWCluster(ctx *cli.Context) error {
 		if cfg.DynamicConfig.CloudProvider != "aliyun" {
 			return fmt.Errorf("cloud provider (%v) not supported yet", cfg.DynamicConfig.CloudProvider)
 		}
-		return handleAliyunECSBuyConfigs(cfg.DynamicConfig.AliyunConfig, *cfg.NodeCount)
+		return handleAliyunECSConfigs(cfg.DynamicConfig.AliyunConfig, *cfg.NodeCount)
 	} else {
 		return fmt.Errorf("cluster type (%v) not supported yet", cfg.ClusterType)
 	}
@@ -234,7 +234,7 @@ func handleFixedConfigs(cfg *FixedNodeConfig, nodeCount int) error {
 	return nil
 }
 
-func handleAliyunECSBuyConfigs(cfg *AliyunEcsConfig, nodeCount int) error {
+func handleAliyunECSConfigs(cfg *AliyunEcsConfig, nodeCount int) error {
 	if cfg.SSHKeyPairName != nil && len(*cfg.SSHKeyPairName) > 0 {
 		if cfg.SSHKeyFile == nil || len(*cfg.SSHKeyFile) == 0 {
 			return fmt.Errorf("need to set --ssh-key-file")
