@@ -15,24 +15,8 @@ import (
 )
 
 const (
-	configFileLong   = "config"
-	nodeCountLong    = "node-count"
-	showTemplateLong = "show-template"
-	// 必选项
-	regionIDLong        = "region-id"
-	accessKeyIDLong     = "access-key-id"
-	accessKeySecretLong = "access-key-secret"
-	templateIDLong      = "template-id"
-	// 可选项
-	periodLong         = "period"
-	periodUnitLong     = "period-unit"
-	hostNamePrefixLong = "host-name-prefix"
-	sshPortLong        = "ssh-port"
-	sshKeyPairNameLong = "ssh-key-pair-name"
-	sshKeyFileLong     = "ssh-key-file"
-	passwordLong       = "password"
-	// 调试选项
-	debugKeyLong = "debug"
+	configFilePathLongFlag = "config"
+	nodeCountLongFlag      = "node-count"
 )
 
 const (
@@ -43,14 +27,11 @@ fixed:
   ssh-key-file: "./key-20191106" # use private key
   password: "123456Abc" # use password
   nodes:
-    - info:
-      inner-ip: "172.17.0.2"
+    - inner-ip: "172.17.0.2"
       host-name: "a"
-    - info:
-      inner-ip: "172.17.0.3"
+    - inner-ip: "172.17.0.3"
       host-name: "b"
-    - info:
-      inner-ip: "172.17.0.4"
+    - inner-ip: "172.17.0.4"
       host-name: "c"
 dynamic:
   cloud-provider: "aliyun"
@@ -67,11 +48,11 @@ dynamic:
     # Optional Parameters.
     # buy node period, no need when the ecs buying template use post-paid mode
     # period: 1
-    # # buy node period unit, Month/Week，default "Month"
+    # # buy node period unit, Month/Week
     # period-unit: "Week"
     # host name creation prefix, default "worker"
     host-name-prefix: "worker"
-    # ssh port, default 20
+    # ssh port, default 22
     ssh-port: 12345
     # ssh key pair name created in ecs console. No need when use password login. Higher priority than password
     ssh-key-pair-name: "test-key-20191106"
@@ -99,23 +80,6 @@ func main() {
 	}
 
 	app.Commands = []cli.Command{
-		// {
-		// 	Name:  "join",
-		// 	Usage: "options for join node to OpenWhisk cluster",
-		// 	Flags: []cli.Flag{
-		// 		cli.StringFlag{
-		// 			Name:  "config,c",
-		// 			Usage: "config file path, must have.",
-		// 			Value: "./node-joiner-configs.yaml",
-		// 		},
-		// 		cli.IntFlag{
-		// 			Name:  nodeCountLong,
-		// 			Usage: "node count that want to be join",
-		// 			Value: 1,
-		// 		},
-		// 	},
-		// 	Action: startClient,
-		// },
 		{
 			Name:  "template",
 			Usage: "options for config yaml template",
@@ -140,7 +104,19 @@ func main() {
 			},
 		},
 	}
-	// app.Action = startClient
+	app.Flags = []cli.Flag{
+		cli.StringFlag{
+			Name:  "config,c",
+			Usage: "config file path, must have.",
+			Value: "./node-joiner-configs.yaml",
+		},
+		cli.IntFlag{
+			Name:  nodeCountLongFlag,
+			Usage: "node count that want to be join",
+			Value: 1,
+		},
+	}
+	app.Action = joinOWCluster
 
 	err := app.Run(os.Args)
 	if err != nil {
@@ -148,12 +124,24 @@ func main() {
 	}
 }
 
-type EcsConfig struct {
-	RegionId       string  `yaml:"region-id"`
-	AccessId       string  `yaml:"access-key-id"`
+type NodeInfo struct {
+	InnerIP  string `yaml:"inner-ip"`
+	HostName string `yaml:"host-name"`
+}
+
+type FixedNodeConfig struct {
+	SSHPort    int         `yaml:"ssh-port,omitempty"`
+	UserName   string      `yaml:"user-name,omitempty"`
+	SSHKeyFile string      `yaml:"ssh-key-file,omitempty"`
+	Password   string      `yaml:"password,omitempty"`
+	Nodes      []*NodeInfo `yaml:"nodes"`
+}
+
+type AliyunEcsConfig struct {
+	RegionID       string  `yaml:"region-id"`
+	AccessID       string  `yaml:"access-key-id"`
 	AccessSecret   string  `yaml:"access-key-secret"`
 	TemplateID     string  `yaml:"template-id"`
-	NodeCount      *int    `yaml:"node-count,omitempty"`
 	Period         *int    `yaml:"period,omitempty"`
 	PeriodUnit     *string `yaml:"period-unit,omitempty"`
 	HostNamePrefix *string `yaml:"host-name-prefix,omitempty"`
@@ -164,96 +152,68 @@ type EcsConfig struct {
 	Debug          *bool   `yaml:"debug,omitempty"`
 }
 
-func startClient(ctx *cli.Context) error {
-	var regionID, accessKey, accessSecret, templateID string
-	var nodeCount, period, sshPort int
-	var periodUnit, hostNamePrefix, sshKeyPairName, sshKeyFile, password string
-	debugMode := false
+type DynamicNodeConfig struct {
+	CloudProvider string           `yaml:"cloud-provider"`
+	AliyunConfig  *AliyunEcsConfig `yaml:"aliyun,omitempty"`
+}
 
-	if path := ctx.String(configFileLong); len(path) > 0 {
-		var cfg EcsConfig
-		if err := ReadYamlFile(path, &cfg); err != nil {
-			return err
-		}
-		regionID = cfg.RegionId
-		accessKey = cfg.AccessId
-		accessSecret = cfg.AccessSecret
-		templateID = cfg.TemplateID
+type TopLevelConfigs struct {
+	ClusterType   string             `yaml:"cluster-type"`
+	FixedConfig   *FixedNodeConfig   `yaml:"fixed,omitempty"`
+	DynamicConfig *DynamicNodeConfig `yaml:"dynamic,omitempty"`
+	NodeCount     *int               `yaml:"node-count,omitempty"`
+}
 
-		// optional args for default value
-		if cfg.NodeCount != nil {
-			nodeCount = *cfg.NodeCount
-		} else {
-			nodeCount = ctx.Int(nodeCountLong)
-		}
-		if cfg.Period != nil {
-			period = *cfg.Period
-		} else {
-			period = ctx.Int(periodLong)
-		}
-		if cfg.PeriodUnit != nil {
-			periodUnit = *cfg.PeriodUnit
-		} else {
-			periodUnit = ctx.String(periodUnitLong)
-		}
-		if cfg.HostNamePrefix != nil {
-			hostNamePrefix = *cfg.HostNamePrefix
-		} else {
-			hostNamePrefix = ctx.String(hostNamePrefixLong)
-		}
-		if cfg.SSHPort != nil {
-			sshPort = *cfg.SSHPort
-		} else {
-			sshPort = ctx.Int(sshPortLong)
-		}
-		if cfg.SSHKeyPairName != nil {
-			sshKeyPairName = *cfg.SSHKeyPairName
-		} else {
-			sshKeyPairName = ctx.String(sshKeyPairNameLong)
-		}
-		if cfg.SSHKeyFile != nil {
-			sshKeyFile = *cfg.SSHKeyFile
-		} else {
-			sshKeyFile = ctx.String(sshKeyFileLong)
-		}
-		if cfg.Password != nil {
-			password = *cfg.Password
-		} else {
-			password = ctx.String(passwordLong)
-		}
-
-		if cfg.Debug != nil {
-			debugMode = *cfg.Debug
-		}
-	} else {
-		regionID = ctx.String(regionIDLong)
-		accessKey = ctx.String(accessKeyIDLong)
-		accessSecret = ctx.String(accessKeySecretLong)
-		templateID = ctx.String(templateIDLong)
-		nodeCount = ctx.Int(nodeCountLong)
-		period = ctx.Int(periodLong)
-		periodUnit = ctx.String(periodUnitLong)
-		hostNamePrefix = ctx.String(hostNamePrefixLong)
-		sshPort = ctx.Int(sshPortLong)
-		sshKeyPairName = ctx.String(sshKeyPairNameLong)
-		sshKeyFile = ctx.String(sshKeyFileLong)
-		password = ctx.String(passwordLong)
-		debugMode = ctx.Bool(debugKeyLong)
+func joinOWCluster(ctx *cli.Context) error {
+	var cfg = TopLevelConfigs{
+		ClusterType: "fixed",
+		FixedConfig: &FixedNodeConfig{
+			SSHPort:  22,
+			UserName: "root",
+		},
+	}
+	configPath := ctx.String(configFilePathLongFlag)
+	if len(configPath) == 0 {
+		return fmt.Errorf("config file not existed")
+	}
+	if err := ReadYamlFile(configPath, &cfg); err != nil {
+		return err
+	}
+	if cfg.NodeCount == nil {
+		nodeCount := ctx.Int(nodeCountLongFlag)
+		cfg.NodeCount = &nodeCount
 	}
 
-	if len(sshKeyPairName) > 0 {
-		if len(sshKeyFile) == 0 {
+	if cfg.ClusterType == "fixed" {
+		//TODO: fixed type configs
+	} else if cfg.ClusterType == "dynamic" {
+		if cfg.DynamicConfig.CloudProvider != "aliyun" {
+			return fmt.Errorf("cloud provider (%v) not supported yet", cfg.DynamicConfig.CloudProvider)
+		}
+		if err := handleAliyunECSBuyConfigs(cfg.DynamicConfig.AliyunConfig, *cfg.NodeCount); err != nil {
+			return err
+		}
+	} else {
+		return fmt.Errorf("cluster type (%v) not supported yet", cfg.ClusterType)
+	}
+
+	return nil
+}
+
+func handleAliyunECSBuyConfigs(cfg *AliyunEcsConfig, nodeCount int) error {
+	if cfg.SSHKeyPairName != nil && len(*cfg.SSHKeyPairName) > 0 {
+		if cfg.SSHKeyFile == nil || len(*cfg.SSHKeyFile) == 0 {
 			return fmt.Errorf("need to set --ssh-key-file")
 		}
 	}
 
-	client, err := ecs.NewClientWithAccessKey(regionID, accessKey, accessSecret)
+	client, err := ecs.NewClientWithAccessKey(cfg.RegionID, cfg.AccessID, cfg.AccessSecret)
 	if err != nil {
 		return err
 	}
 
 	// 创建实例
-	instanceIds, err := runInstances(client, templateID, nodeCount, period, periodUnit, hostNamePrefix, sshKeyPairName, password, debugMode)
+	instanceIds, err := runAliyunInstances(client, cfg, nodeCount)
 	if err != nil {
 		return err
 	}
@@ -264,15 +224,26 @@ func startClient(ctx *cli.Context) error {
 		return nil
 	}
 
+	var port int
+	if cfg.SSHPort != nil {
+		port = *cfg.SSHPort
+	} else {
+		port = 22
+	}
+
 	// 连接实例并将它们加入OpenWhisk集群，阿里云的默认登陆账户为root
-	if err := joinInstancesToOWCluster(infos, sshPort, "root", password, sshKeyFile); err != nil {
+	if err := joinInstancesToOWCluster(infos, port, "root", cfg.Password, cfg.SSHKeyFile); err != nil {
 		return err
 	}
 
 	return nil
 }
 
-func joinInstancesToOWCluster(infos []nodeInfo, nodeSSHPort int, user, password, sshKeyFile string) error {
+func joinInstancesToOWCluster(infos []nodeInfo, nodeSSHPort int, user string, sshKeyFile, password *string) error {
+	if sshKeyFile == nil && password == nil {
+		return fmt.Errorf("no key, could not login to nodes")
+	}
+
 	var ips, names string
 	for idx, info := range infos {
 		ips += info.InnerIP
@@ -282,14 +253,14 @@ func joinInstancesToOWCluster(infos []nodeInfo, nodeSSHPort int, user, password,
 			names += ","
 		}
 	}
-	if len(sshKeyFile) > 0 {
+	if len(*sshKeyFile) > 0 {
 		// 使用私钥文件ssh登陆
-		_, err := exec.Command("./join-k8s.sh", "-h", ips, "-P", strconv.Itoa(nodeSSHPort), "-n", names, "-u", user, "-s", sshKeyFile).Output()
+		_, err := exec.Command("./join-k8s.sh", "-h", ips, "-P", strconv.Itoa(nodeSSHPort), "-n", names, "-u", user, "-s", *sshKeyFile).Output()
 		return err
 	}
 
 	// 使用密码ssh登陆
-	_, err := exec.Command("./join-k8s.sh", "-h", ips, "-P", strconv.Itoa(nodeSSHPort), "-n", names, "-u", user, "-p", password).Output()
+	_, err := exec.Command("./join-k8s.sh", "-h", ips, "-P", strconv.Itoa(nodeSSHPort), "-n", names, "-u", user, "-p", *password).Output()
 	return err
 }
 
@@ -322,29 +293,43 @@ func checkInstancesInfo(client *ecs.Client, instanceIds []string) ([]nodeInfo, e
 	return infos, nil
 }
 
-func runInstances(client *ecs.Client, templateID string, nodeCount, period int, periodUnit string, hostNamePrefix, sshKeyPairName, password string, debugMode bool) ([]string, error) {
-	// 创建请求并设置参数
-	request := ecs.CreateRunInstancesRequest()
-	request.LaunchTemplateId = templateID
-	request.Amount = requests.NewInteger(nodeCount) // 购买台数
-	request.Period = requests.NewInteger(period)    // 购买周期
-	request.PeriodUnit = periodUnit                 // 周期单位，默认为月
-	if len(sshKeyPairName) > 0 {
-		request.KeyPairName = sshKeyPairName // 优先使用私钥文件登陆
-	} else if len(password) > 0 {
-		request.Password = password
+func runAliyunInstances(client *ecs.Client, cfg *AliyunEcsConfig, nodeCount int) ([]string, error) {
+	if cfg == nil {
+		return nil, fmt.Errorf("aliyun configs not set")
 	}
-	t := time.Now().Format("2006-01-02-15-04")
-	request.InstanceName = fmt.Sprintf("%v-dynamic-%v-[%v,3]", hostNamePrefix, t, nodeCount)
-	request.HostName = fmt.Sprintf("%v-%v-[%v,3]", hostNamePrefix, t, nodeCount)
-	if debugMode {
-		request.DryRun = requests.NewBoolean(true) // 调试模式
-	}
-	request.ClientToken = t // 同1分钟只允许扩容一次
 
-	response, err := client.RunInstances(request) // 发布请求
+	// create request and supply default value
+	request := ecs.CreateRunInstancesRequest()
+	request.LaunchTemplateId = cfg.TemplateID
+	request.Amount = requests.NewInteger(nodeCount)
+	if cfg.Period != nil {
+		request.Period = requests.NewInteger(*cfg.Period) // node buying period
+	}
+	if cfg.PeriodUnit != nil {
+		request.PeriodUnit = *cfg.PeriodUnit // node buying period unit
+	}
+	if cfg.SSHKeyPairName != nil && len(*cfg.SSHKeyPairName) > 0 {
+		request.KeyPairName = *cfg.SSHKeyPairName // ssh key first
+	} else if cfg.Password != nil && len(*cfg.Password) > 0 {
+		request.Password = *cfg.Password // password second
+	} else {
+		return nil, fmt.Errorf("aliyun login key not set")
+	}
+	hostNamePrefix := "worker" // default host name prefix
+	if cfg.HostNamePrefix != nil && len(*cfg.HostNamePrefix) > 0 {
+		hostNamePrefix = *cfg.HostNamePrefix
+	}
+	t := time.Now().Format("2006-01-02-15-04") // time format to distinguish between node names
+	request.InstanceName = fmt.Sprintf("%v-%v-[%v,3]", hostNamePrefix, t, nodeCount)
+	request.HostName = fmt.Sprintf("%v-%v-[%v,3]", hostNamePrefix, t, nodeCount)
+	request.ClientToken = t // only one creation in the same minute
+	if cfg.Debug != nil && *cfg.Debug {
+		request.DryRun = requests.NewBoolean(true) // debug mode
+	}
+
+	// send request
+	response, err := client.RunInstances(request)
 	if err != nil {
-		// 异常处理
 		return nil, err
 	}
 	return response.InstanceIdSets.InstanceIdSet, nil
