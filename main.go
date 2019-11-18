@@ -208,7 +208,7 @@ func contains(s []string, e string) bool {
 
 func handleFixedConfigs(cfg *FixedNodeConfig, nodeCount int) error {
 	// got current nodes
-	output, err := exec.Command("bash", "-c", "kubectl get no | awk 'NR==1{next} $3!=\"master\" {print $1}'").Output()
+	output, err := exec.Command("bash", "-c", "kubectl get no --show-labels | grep \"openwhisk-role=invoker\" | awk '{print $1}'").Output()
 	if err != nil {
 		fmt.Printf("kubectl failed: %v", err.Error())
 		return err
@@ -229,9 +229,7 @@ func handleFixedConfigs(cfg *FixedNodeConfig, nodeCount int) error {
 	}
 
 	// add nodes
-	joinInstancesToOWCluster(targetNodes, cfg.SSHPort, cfg.UserName, cfg.SSHKeyFile, cfg.Password)
-
-	return nil
+	return joinInstancesToOWCluster(targetNodes, cfg.SSHPort, cfg.UserName, cfg.SSHKeyFile, cfg.Password)
 }
 
 func handleAliyunECSConfigs(cfg *AliyunEcsConfig, nodeCount int) error {
@@ -246,13 +244,13 @@ func handleAliyunECSConfigs(cfg *AliyunEcsConfig, nodeCount int) error {
 		return err
 	}
 
-	// 创建实例
+	// create instances
 	instanceIds, err := runAliyunInstances(client, cfg, nodeCount)
 	if err != nil {
 		return err
 	}
 
-	// 获取实例信息
+	// get info of instances
 	infos, err := checkInstancesInfo(client, instanceIds)
 	if err != nil {
 		return nil
@@ -265,12 +263,8 @@ func handleAliyunECSConfigs(cfg *AliyunEcsConfig, nodeCount int) error {
 		port = 22
 	}
 
-	// 连接实例并将它们加入OpenWhisk集群，阿里云的默认登陆账户为root
-	if err := joinInstancesToOWCluster(infos, port, "root", cfg.Password, cfg.SSHKeyFile); err != nil {
-		return err
-	}
-
-	return nil
+	// connect instances and join them to OpenWhisk cluster. "root" for aliyun ecs node default user
+	return joinInstancesToOWCluster(infos, port, "root", cfg.Password, cfg.SSHKeyFile)
 }
 
 func joinInstancesToOWCluster(infos []*NodeInfo, nodeSSHPort int, user string, sshKeyFile, password *string) error {
@@ -288,12 +282,12 @@ func joinInstancesToOWCluster(infos []*NodeInfo, nodeSSHPort int, user string, s
 		}
 	}
 	if sshKeyFile != nil && len(*sshKeyFile) > 0 {
-		// 使用私钥文件ssh登陆
+		// use ssh private key
 		_, err := exec.Command("./join-k8s.sh", "-h", ips, "-P", strconv.Itoa(nodeSSHPort), "-n", names, "-u", user, "-s", *sshKeyFile).Output()
 		return err
 	}
 
-	// 使用密码ssh登陆
+	// use password
 	_, err := exec.Command("./join-k8s.sh", "-h", ips, "-P", strconv.Itoa(nodeSSHPort), "-n", names, "-u", user, "-p", *password).Output()
 	return err
 }
