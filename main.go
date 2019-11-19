@@ -16,8 +16,9 @@ import (
 )
 
 const (
-	configFilePathLongFlag = "config"
-	nodeCountLongFlag      = "node-count"
+	configFilePathLongFlag   = "config"
+	nodeCountLongFlag        = "node-count"
+	workingDirectoryLongFlag = "working-directory"
 )
 
 const (
@@ -25,7 +26,7 @@ const (
 fixed:
   ssh-port: 12345
   user-name: "root"
-  ssh-key-file: "./key-20191106" # use private key
+  ssh-key-file: "/root/key-20191106" # use private key
   password: "123456Abc" # use password
   nodes:
     - inner-ip: "172.17.0.2"
@@ -58,7 +59,7 @@ dynamic:
     # ssh key pair name created in ecs console. No need when use password login. Higher priority than password
     ssh-key-pair-name: "test-key-20191106"
     # ssh private key path, must needed when use ssh-key-pair-name
-    ssh-key-file: "./key-20191106"
+    ssh-key-file: "/root/key-20191106"
     # password, no need when use ssh private key login
     password: "123456Abc"
     # Debug Parameters
@@ -66,8 +67,9 @@ dynamic:
     debug: false
 # Command Line Parameters. Could be used in yaml, too
 # # node count that want to be join. default 1
-# node-count:
-#   1`
+# node-count: 1
+# # working directory for the joiner cmd and scripts default "/root/node-handler"
+# working-directory: "."`
 )
 
 func main() {
@@ -116,6 +118,11 @@ func main() {
 			Usage: "node count that want to be join",
 			Value: 1,
 		},
+		cli.StringFlag{
+			Name:  "working-directory,d",
+			Usage: "working directory for the joiner cmd and scripts",
+			Value: "/root/node-handler",
+		},
 	}
 	app.Action = joinOWCluster
 
@@ -159,10 +166,11 @@ type DynamicNodeConfig struct {
 }
 
 type TopLevelConfigs struct {
-	ClusterType   string             `yaml:"cluster-type"`
-	FixedConfig   *FixedNodeConfig   `yaml:"fixed,omitempty"`
-	DynamicConfig *DynamicNodeConfig `yaml:"dynamic,omitempty"`
-	NodeCount     *int               `yaml:"node-count,omitempty"`
+	ClusterType      string             `yaml:"cluster-type"`
+	FixedConfig      *FixedNodeConfig   `yaml:"fixed,omitempty"`
+	DynamicConfig    *DynamicNodeConfig `yaml:"dynamic,omitempty"`
+	NodeCount        *int               `yaml:"node-count,omitempty"`
+	WorkingDirectory *string            `yaml:"working-directory,omitempty"`
 }
 
 func joinOWCluster(ctx *cli.Context) error {
@@ -184,14 +192,18 @@ func joinOWCluster(ctx *cli.Context) error {
 		nodeCount := ctx.Int(nodeCountLongFlag)
 		cfg.NodeCount = &nodeCount
 	}
+	if cfg.WorkingDirectory == nil {
+		workingDirectory := ctx.String(workingDirectoryLongFlag)
+		cfg.WorkingDirectory = &workingDirectory
+	}
 
 	if cfg.ClusterType == "fixed" {
-		return handleFixedConfigs(cfg.FixedConfig, *cfg.NodeCount)
+		return handleFixedConfigs(cfg.FixedConfig, *cfg.NodeCount, *cfg.WorkingDirectory)
 	} else if cfg.ClusterType == "dynamic" {
 		if cfg.DynamicConfig.CloudProvider != "aliyun" {
 			return fmt.Errorf("cloud provider (%v) not supported yet", cfg.DynamicConfig.CloudProvider)
 		}
-		return handleAliyunECSConfigs(cfg.DynamicConfig.AliyunConfig, *cfg.NodeCount)
+		return handleAliyunECSConfigs(cfg.DynamicConfig.AliyunConfig, *cfg.NodeCount, *cfg.WorkingDirectory)
 	} else {
 		return fmt.Errorf("cluster type (%v) not supported yet", cfg.ClusterType)
 	}
@@ -206,7 +218,7 @@ func contains(s []string, e string) bool {
 	return false
 }
 
-func handleFixedConfigs(cfg *FixedNodeConfig, nodeCount int) error {
+func handleFixedConfigs(cfg *FixedNodeConfig, nodeCount int, workingDirectory string) error {
 	// got current nodes
 	output, err := exec.Command("bash", "-c", "kubectl get no --show-labels | grep \"openwhisk-role=invoker\" | awk '{print $1}'").Output()
 	if err != nil {
@@ -229,10 +241,10 @@ func handleFixedConfigs(cfg *FixedNodeConfig, nodeCount int) error {
 	}
 
 	// add nodes
-	return joinInstancesToOWCluster(targetNodes, cfg.SSHPort, cfg.UserName, cfg.SSHKeyFile, cfg.Password)
+	return joinInstancesToOWCluster(targetNodes, cfg.SSHPort, cfg.UserName, cfg.SSHKeyFile, cfg.Password, workingDirectory)
 }
 
-func handleAliyunECSConfigs(cfg *AliyunEcsConfig, nodeCount int) error {
+func handleAliyunECSConfigs(cfg *AliyunEcsConfig, nodeCount int, workingDirectory string) error {
 	if cfg.SSHKeyPairName != nil && len(*cfg.SSHKeyPairName) > 0 {
 		if cfg.SSHKeyFile == nil || len(*cfg.SSHKeyFile) == 0 {
 			return fmt.Errorf("need to set --ssh-key-file")
@@ -264,10 +276,10 @@ func handleAliyunECSConfigs(cfg *AliyunEcsConfig, nodeCount int) error {
 	}
 
 	// connect instances and join them to OpenWhisk cluster. "root" for aliyun ecs node default user
-	return joinInstancesToOWCluster(infos, port, "root", cfg.Password, cfg.SSHKeyFile)
+	return joinInstancesToOWCluster(infos, port, "root", cfg.Password, cfg.SSHKeyFile, workingDirectory)
 }
 
-func joinInstancesToOWCluster(infos []*NodeInfo, nodeSSHPort int, user string, sshKeyFile, password *string) error {
+func joinInstancesToOWCluster(infos []*NodeInfo, nodeSSHPort int, user string, sshKeyFile, password *string, workingDirectory string) error {
 	if sshKeyFile == nil && password == nil {
 		return fmt.Errorf("no key, could not login to nodes")
 	}
@@ -283,12 +295,12 @@ func joinInstancesToOWCluster(infos []*NodeInfo, nodeSSHPort int, user string, s
 	}
 	if sshKeyFile != nil && len(*sshKeyFile) > 0 {
 		// use ssh private key
-		_, err := exec.Command("./join-k8s.sh", "-h", ips, "-P", strconv.Itoa(nodeSSHPort), "-n", names, "-u", user, "-s", *sshKeyFile).Output()
+		_, err := exec.Command(workingDirectory+"/join-k8s.sh", "-h", ips, "-P", strconv.Itoa(nodeSSHPort), "-n", names, "-u", user, "-s", *sshKeyFile, "-d", workingDirectory).Output()
 		return err
 	}
 
 	// use password
-	_, err := exec.Command("./join-k8s.sh", "-h", ips, "-P", strconv.Itoa(nodeSSHPort), "-n", names, "-u", user, "-p", *password).Output()
+	_, err := exec.Command(workingDirectory+"/join-k8s.sh", "-h", ips, "-P", strconv.Itoa(nodeSSHPort), "-n", names, "-u", user, "-p", *password, "-d", workingDirectory).Output()
 	return err
 }
 

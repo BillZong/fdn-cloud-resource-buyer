@@ -7,10 +7,10 @@ sysname=`uname`
 # params analyzing
 if [ ${sysname}='Darwin' ]; then
     # this shell only works on Mac and bash now.
-    ARGS=`getopt h:n:u:p:P:s: $@`
+    ARGS=`getopt h:n:u:p:P:s:d: $@`
 elif [ ${sysname}='Linux' || ${sysname}='Unix' ]; then
     # this only works on linux/unix.
-    ARGS=`getopt -o h:n:u:p:P:s: -l hosts:,names:,user:,password:,port:ssh-file: -- "$@"`
+    ARGS=`getopt -o h:n:u:p:P:s:d: -l hosts:,names:,user:,password:,port:,ssh-file:,working-directory: -- "$@"`
 else
     echo "Windows not supported yet"
 fi
@@ -65,6 +65,10 @@ do
             sshFile=$2
             shift 2
             ;;
+        -d|--working-directory)
+            workingDirectory=$2
+            shift 2
+            ;;
         --)
             shift;
             break;
@@ -80,11 +84,15 @@ if [ -z $user ]; then
     user="root"
 fi
 
+if [ -z "$workingDirectory" ]; then
+    workingDirectory="."
+fi
+
 if [ -n "$sshFile" ]; then
-    joiner_file="./joiner-key.sh"
+    joiner_file="$workingDirectory/joiner-key.sh"
     key=$sshFile
 elif [ -n "$password" ]; then
-    joiner_file="./joiner-pwd.sh"
+    joiner_file="$workingDirectory/joiner-pwd.sh"
     key=$password
 else
     echo "no ssh key file and password, could not login"
@@ -95,10 +103,10 @@ if [ -z $port ]; then
     port=22
 fi
 
-join_token_cmd_file=./token.txt
+join_token_cmd_file="$workingDirectory/token.txt"
 # 在当前宿主机生成临时用token
 kubeadm token create --ttl 5m --print-join-command >$join_token_cmd_file
-# echo "kubeadm join 172.18.139.54:6443 --token cthmyb.ep7g3reaa024gus5 --discovery-token-ca-cert-hash sha256:6b721270f1b519dbc1f739ec4d7b37b2edb387b795e35a9b8faede8192f0822a" > $join_token_cmd_file
+# echo "kubeadm join 172.18.240.183:6443 --token 3wsxrn.vkp0iqge8vldrt4x --discovery-token-ca-cert-hash sha256:8f803f9db9a340de437397037b6a1a80d692c3bd7a9d80ab74fadcb726a669b9" > $join_token_cmd_file
 
 # ssh 所有节点，并将其加入K8S集群
 if [ -n "$hostsArr" ]; then
